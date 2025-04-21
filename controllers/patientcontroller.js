@@ -20,8 +20,10 @@ const sendWelcomeEmail = async (email, name, otp) => {
             </div>
         `
     };
+    console.log(payload);
 
-    await fetch("https://api.brevo.com/v3/smtp/email", {
+    try {
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
         method: "POST",
         headers: {
             "api-key": BREVO_API_KEY,
@@ -30,6 +32,20 @@ const sendWelcomeEmail = async (email, name, otp) => {
         },
         body: JSON.stringify(payload)
     });
+
+    const result = await response.json();
+
+    if (response.ok) {
+        console.log("✅ Email sent successfully!");
+        console.log(result); // contains messageId and other info
+    } else {
+        console.error("❌ Failed to send email:", result);
+    }
+
+} catch (error) {
+    console.error("❌ Error while sending email:", error);
+}
+
 };
 // In-memory store for OTPs (temporary storage until verification)
 const otpStore = {}; // Format: { [email]: { otp, expiresAt, userData } }
