@@ -197,30 +197,98 @@ exports.updateHCP = async (req, res, pool) => {
 exports.deleteHCP = async (req, res, pool) => {
     const { id } = req.params; // hcp_id from URL
 
+    const connection = await pool.promise().getConnection();
+
     try {
-        // First, get the user_id from hcp
-        const [rows] = await pool.promise().query(
+        await connection.beginTransaction();
+
+        // Get the user_id from health_care_professional table
+        const [rows] = await connection.query(
             `SELECT user_id FROM health_care_professional WHERE hcp_id = ?`,
             [id]
         );
 
         if (rows.length === 0) {
+            await connection.release();
             return res.status(404).json({ error: "HCP not found." });
         }
 
         const user_id = rows[0].user_id;
 
-        // Delete from health_care_professional table
-        await pool.promise().query(`DELETE FROM health_care_professional WHERE hcp_id = ?`, [id]);
+        // Step 1: Get appointments by this HCP (if applicable)
+        const [appointments] = await connection.query(
+            "SELECT appointment_id FROM appointment WHERE hcp_id = ?",
+            [id]
+        );
+        const appointmentIds = appointments.map((row) => row.appointment_id);
 
-        // Delete from users table
-        await pool.promise().query(`DELETE FROM users WHERE user_id = ?`, [user_id]);
+        if (appointmentIds.length > 0) {
+            // Step 2: Delete any booked slots associated
+            await connection.query(
+                "DELETE FROM booked_slots WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
 
-        res.json({ message: "HCP deleted successfully." });
+            // Step 3: Delete treatments associated with these appointments
+            const [treatments] = await connection.query(
+                "SELECT treatment_id FROM treatment WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+            const treatmentIds = treatments.map(row => row.treatment_id);
+
+            if (treatmentIds.length > 0) {
+                await connection.query(
+                    "DELETE FROM treatment_medication WHERE treatment_id IN (?)",
+                    [treatmentIds]
+                );
+                await connection.query(
+                    "DELETE FROM treatment WHERE treatment_id IN (?)",
+                    [treatmentIds]
+                );
+            }
+
+            // Step 4: Handle prescribed tests and patient tests
+            const [prescribedTests] = await connection.query(
+                "SELECT prescribed_test_id FROM prescribed_test WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+            const prescribedTestIds = prescribedTests.map(row => row.prescribed_test_id);
+
+            if (prescribedTestIds.length > 0) {
+                await connection.query(
+                    "DELETE FROM patient_test WHERE prescribed_test_id IN (?)",
+                    [prescribedTestIds]
+                );
+                await connection.query(
+                    "DELETE FROM prescribed_test WHERE prescribed_test_id IN (?)",
+                    [prescribedTestIds]
+                );
+            }
+
+            // Step 5: Delete appointments
+            await connection.query(
+                "DELETE FROM appointment WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+        }
+
+        // Step 6: Delete from health_care_professional table
+        await connection.query(`DELETE FROM health_care_professional WHERE hcp_id = ?`, [id]);
+
+        // Step 7: Delete user record
+        await connection.query(`DELETE FROM users WHERE user_id = ?`, [user_id]);
+
+        await connection.commit();
+
+        res.status(200).json({ message: "HCP and related records deleted successfully." });
 
     } catch (err) {
+        await connection.rollback();
         console.error("Error deleting HCP:", err);
         res.status(500).json({ error: "Internal server error." });
+    } finally {
+        connection.release();
     }
 };
+
 
