@@ -73,6 +73,7 @@ exports.registerPatient = async (req, res, pool) => {
         otpStore[email] = { otp, expiresAt, userData: { name, dob, gender, contact, address, email, username, password, blood_group, insurance_id,medical_history } };  
 
         // Send OTP to email
+        console.log(email,name,otp);
         await sendWelcomeEmail(email,name, otp);
 
         // Respond with a message asking to verify OTP
