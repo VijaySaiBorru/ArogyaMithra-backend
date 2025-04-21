@@ -438,37 +438,118 @@ exports.updatePatient = async (req, res, pool) => {
 
 
 exports.deletePatient = async (req, res, pool) => {
-    // Determine if an admin is deleting a specific patient
-    const isAdmin = req.user && req.user.role === "admin";  // Assume 'role' is set in the token
+    const isAdmin = req.user && req.user.role === "admin";
     const patient_id = isAdmin ? req.params.patient_id : req.user.patient_id;
 
     if (!patient_id) {
         return res.status(400).json({ error: "Patient ID not provided." });
     }
 
+    const connection = await pool.promise().getConnection();
+
     try {
+        await connection.beginTransaction();
+
         // Check if patient exists
-        const [existingPatient] = await pool.promise().query(
+        const [existingPatient] = await connection.query(
             "SELECT * FROM patient WHERE patient_id = ?",
             [patient_id]
         );
 
         if (existingPatient.length === 0) {
+            await connection.release();
             return res.status(404).json({ error: "Patient not found." });
         }
 
-        // Delete the patient
-        await pool.promise().query(
+        // 1. Get appointment IDs linked to this patient
+        const [appointments] = await connection.query(
+            "SELECT appointment_id FROM appointment WHERE patient_id = ?",
+            [patient_id]
+        );
+
+        const appointmentIds = appointments.map((row) => row.appointment_id);
+
+        if (appointmentIds.length > 0) {
+            // 2. Get prescribed_test_ids
+            const [prescribedTests] = await connection.query(
+                "SELECT prescribed_test_id FROM prescribed_test WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+
+            const prescribedTestIds = prescribedTests.map((row) => row.prescribed_test_id);
+
+            // 3. Delete patient_test entries
+            if (prescribedTestIds.length > 0) {
+                await connection.query(
+                    "DELETE FROM patient_test WHERE prescribed_test_id IN (?)",
+                    [prescribedTestIds]
+                );
+            }
+
+            // 4. Delete prescribed_test entries
+            if (prescribedTestIds.length > 0) {
+                await connection.query(
+                    "DELETE FROM prescribed_test WHERE prescribed_test_id IN (?)",
+                    [prescribedTestIds]
+                );
+            }
+
+            // 5. Delete treatment_medication entries
+            const [treatments] = await connection.query(
+                "SELECT treatment_id FROM treatment WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+            const treatmentIds = treatments.map((row) => row.treatment_id);
+
+            if (treatmentIds.length > 0) {
+                await connection.query(
+                    "DELETE FROM treatment_medication WHERE treatment_id IN (?)",
+                    [treatmentIds]
+                );
+            }
+
+            // 6. Delete treatments
+            await connection.query(
+                "DELETE FROM treatment WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+
+            // 7. Delete booked_slots
+            await connection.query(
+                "DELETE FROM booked_slots WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+
+            // 8. Delete appointments
+            await connection.query(
+                "DELETE FROM appointment WHERE appointment_id IN (?)",
+                [appointmentIds]
+            );
+        }
+
+        // 9. Delete admissions
+        await connection.query(
+            "DELETE FROM admission WHERE patient_id = ?",
+            [patient_id]
+        );
+
+        // 10. Finally delete the patient
+        await connection.query(
             "DELETE FROM patient WHERE patient_id = ?",
             [patient_id]
         );
 
-        res.status(200).json({ message: "Patient deleted successfully." });
+        await connection.commit();
+        res.status(200).json({ message: "Patient and all associated records deleted successfully." });
     } catch (err) {
+        await connection.rollback();
         console.error("Error deleting patient:", err);
         res.status(500).json({ error: "Failed to delete patient." });
+    } finally {
+        connection.release();
     }
 };
+
 
 exports.getPatientsByPartialName = (req, res, pool) => {
     const { q } = req.query;
