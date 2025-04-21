@@ -20,7 +20,7 @@ const startReminderJob = require("./jobs/Reminder"); // 👈 add this line
 const sendreportstodoctors=require("./jobs/SendReports");
 
 app.use(cors({
-    origin: 'http://localhost:5173', // or whatever port your frontend runs on
+    origin: ['http://localhost:5173','https://arogya-mithra-frontend.vercel.app/'], // or whatever port your frontend runs on
     methods: ['GET', 'POST', 'PUT', 'DELETE','PATCH'],
     credentials: true
 }));
